@@ -75,17 +75,21 @@ func (n *Node) Start() {
 			}
 		case id := <-n.breakUpCh: // End friendship request.
 			atomic.AddInt32(&BreakUps, 1)
-			if len(n.friends) > n.fanout {
-				continue
-			}
 			for i := range n.friends {
 				if n.friends[i] == id {
+					if len(n.friends) > n.fanout {
+						// We have more friends than we need, so just remove one.
+						// is enough, no need to make new friends.
+						n.removeFriend(i)
+						break
+					}
 					newFriendId := rand.Intn(len(GlobalView))
 					for newFriendId == id || newFriendId == n.id {
 						newFriendId = rand.Intn(len(GlobalView))
 					}
 					n.friends[i] = newFriendId
 					n.Makeup(newFriendId)
+					break
 				}
 			}
 		case <-n.needNewFriendCh: // Keep making new friends if we haven't enough.
@@ -101,7 +105,7 @@ func (n *Node) Start() {
 				}
 			}
 		case <-n.recvMsgCh: // Handle messages.
-			if n.crashed {
+			if n.crashed { // Crashed machine doesn't forward any messages.
 				continue
 			}
 			atomic.AddInt32(&TotalMessage, 1)
@@ -110,7 +114,7 @@ func (n *Node) Start() {
 				atomic.AddInt32(&TotalCrashed, 1)
 				continue
 			}
-			if n.received {
+			if n.received { // If already received the message, won't forward.
 				continue
 			}
 			n.received = true
@@ -118,6 +122,19 @@ func (n *Node) Start() {
 			n.Broadcast()
 		}
 	}
+}
+
+func (n *Node) removeFriend(friendPos int) {
+	f := make([]int, len(n.friends)-1)
+	j := 0
+	for i := range n.friends {
+		if i == friendPos {
+			continue
+		}
+		f[j] = n.friends[i]
+		j++
+	}
+	n.friends = f
 }
 
 func (n *Node) Broadcast() {
