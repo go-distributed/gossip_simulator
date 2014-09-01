@@ -179,7 +179,11 @@ func init() {
 
 	fmt.Println("=== Parameters ===")
 	flag.VisitAll(func(fl *flag.Flag) {
-		fmt.Println(fl.Name, "=", fl.Value)
+		fmt.Print(fl.Name, "=", fl.Value)
+		if fl.Name == "delaylow" || fl.Name == "delayhigh" {
+			fmt.Print("ms")
+		}
+		fmt.Println()
 	})
 }
 
