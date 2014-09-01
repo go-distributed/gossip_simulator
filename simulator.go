@@ -1,29 +1,40 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"math/rand"
 	"sync/atomic"
 	"time"
 )
 
-var GlobalView []*Node
+// Parameters
+var (
+	N         int
+	Fanout    int
+	Fanin     int
+	DelayLow  int
+	DelayHigh int
+	DropRate  float64
+	CrashRate float64
+)
 
-var MakeUps int32
-var BreakUps int32
-var Runs int32
-var TotalReceived int32
-var TotalCrashed int32
-var TotalMessage int32
+// Gloabals
+var (
+	GlobalView []*Node
 
-var DelayLow int
-var DelayHigh int
-var DropRate float32
-var CrashRate float32
+	MakeUps       int32
+	BreakUps      int32
+	Runs          int32
+	TotalReceived int32
+	TotalCrashed  int32
+	TotalMessage  int32
+)
 
 type Node struct {
 	id              int
 	fanout          int
+	fanin           int
 	received        bool
 	crashed         bool
 	recvMsgCh       chan bool
@@ -34,7 +45,7 @@ type Node struct {
 	friends []int
 }
 
-func NewNode(id, fanout int) *Node {
+func NewNode(id, fanout, fanin int) *Node {
 	return &Node{
 		id:              id,
 		recvMsgCh:       make(chan bool, 1024),
@@ -43,6 +54,7 @@ func NewNode(id, fanout int) *Node {
 		needNewFriendCh: make(chan bool, 1024),
 
 		fanout:  fanout,
+		fanin:   fanin,
 		friends: make([]int, 0, fanout),
 	}
 }
@@ -51,9 +63,9 @@ func (n *Node) Start() {
 	atomic.AddInt32(&Runs, 1)
 	for {
 		select {
-		case id := <-n.makeUpCh: // New friends request
+		case id := <-n.makeUpCh: // New friendship request.
 			atomic.AddInt32(&MakeUps, 1)
-			if len(n.friends) < n.fanout+2 {
+			if len(n.friends) < n.fanin {
 				n.friends = append(n.friends, id)
 			} else {
 				victimPos := rand.Intn(len(n.friends))
@@ -61,7 +73,7 @@ func (n *Node) Start() {
 				n.Breakup(victimId)
 				n.friends[victimPos] = id
 			}
-		case id := <-n.breakUpCh:
+		case id := <-n.breakUpCh: // End friendship request.
 			atomic.AddInt32(&BreakUps, 1)
 			if len(n.friends) > n.fanout {
 				continue
@@ -76,7 +88,7 @@ func (n *Node) Start() {
 					n.Makeup(newFriendId)
 				}
 			}
-		case <-n.needNewFriendCh:
+		case <-n.needNewFriendCh: // Keep making new friends if we haven't enough.
 			if len(n.friends) < n.fanout {
 				newFriendId := rand.Intn(len(GlobalView))
 				if newFriendId == n.id {
@@ -88,7 +100,7 @@ func (n *Node) Start() {
 					go func() { n.needNewFriendCh <- true }()
 				}
 			}
-		case <-n.recvMsgCh:
+		case <-n.recvMsgCh: // Handle messages.
 			if n.crashed {
 				continue
 			}
@@ -154,29 +166,28 @@ func RandomCrash() bool {
 	return false
 }
 
-func SetDelay(low, high int) {
-	DelayLow, DelayHigh = low, high
-}
+func init() {
+	flag.IntVar(&N, "n", 50000, "total number of nodes")
+	flag.IntVar(&Fanout, "fanout", 5, "fanout")
+	flag.IntVar(&Fanin, "fanin", Fanout+1, "fanin")
+	flag.IntVar(&DelayLow, "delaylow", 10, "delay low (ms)")
+	flag.IntVar(&DelayHigh, "delayhigh", 20, "delay high (ms)")
+	flag.Float64Var(&DropRate, "droprate", 0.1, "message drop rate")
+	flag.Float64Var(&CrashRate, "crashrate", 0.001, "machine crash rate")
 
-func SetDropRate(drop float32) {
-	DropRate = drop
-}
+	flag.Parse()
 
-func SetCrashRate(crash float32) {
-	CrashRate = crash
+	fmt.Println("=== Parameters ===")
+	flag.VisitAll(func(fl *flag.Flag) {
+		fmt.Println(fl.Name, "=", fl.Value)
+	})
 }
 
 func main() {
-	n, fanout := 50000, 5
-	GlobalView = make([]*Node, n)
-
-	// Setup Delay, DropRate and CrashRate
-	SetDelay(10, 20) // ms
-	SetDropRate(0.1)
-	SetCrashRate(0.001) // 0.1% CrashRate
+	GlobalView = make([]*Node, N)
 
 	for i := range GlobalView {
-		GlobalView[i] = NewNode(i, fanout)
+		GlobalView[i] = NewNode(i, Fanout, Fanin)
 	}
 
 	for i := range GlobalView {
@@ -184,44 +195,40 @@ func main() {
 		go GlobalView[i].Start()
 	}
 
+	fmt.Println("\n=== Constructing Overlay ===")
+
 	startTime := time.Now()
 	for {
-		<-time.After(time.Microsecond * 100)
+		<-time.After(time.Millisecond * 10)
 		makeup, breakup := atomic.LoadInt32(&MakeUps), atomic.LoadInt32(&BreakUps)
 
 		runs := atomic.LoadInt32(&Runs)
-		if makeup == 0 && breakup == 0 && runs == int32(n) {
+		if makeup == 0 && breakup == 0 && runs == int32(N) {
 			break
 		}
-		//fmt.Println("break", breakup, "makeup", makeup)
+		fmt.Println("break", breakup, "makeup", makeup, "elasped", time.Since(startTime))
 
 		atomic.StoreInt32(&MakeUps, 0)
 		atomic.StoreInt32(&BreakUps, 0)
 	}
-	elasped := time.Since(startTime)
-	//for i := range GlobalView {
-	//	fmt.Println(i, ":", GlobalView[i].friends, len(GlobalView[i].friends))
-	//
-	//}
-	fmt.Printf("Took %v to stablize\n", elasped)
+	fmt.Printf("--- Took %v to stablize ---\n\n", time.Since(startTime))
+
+	fmt.Println("=== Broadcast one message ===")
 
 	startTime = time.Now()
-
 	senderPos := rand.Intn(len(GlobalView))
-
 	GlobalView[senderPos].Broadcast()
 
 	for {
 		<-time.After(time.Millisecond * 10)
 		totalReceived := atomic.LoadInt32(&TotalReceived)
-		percent := float32(totalReceived) / float32(n)
+		percent := float32(totalReceived) / float32(N)
 		fmt.Printf("%v%% covered, took %v\n", percent*100, time.Since(startTime))
 		if percent >= 0.99 {
 			break
 		}
 	}
-	elasped = time.Since(startTime)
-	fmt.Printf("Took %v to get 99%%\n", elasped)
+	fmt.Printf("--- Took %v to get 99%% ---\n\n", time.Since(startTime))
 	fmt.Println("Total message", TotalMessage, "Total Crashed", TotalCrashed)
 
 }
