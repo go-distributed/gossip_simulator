@@ -211,7 +211,7 @@ func main() {
 		atomic.StoreInt32(&MakeUps, 0)
 		atomic.StoreInt32(&BreakUps, 0)
 	}
-	fmt.Printf("--- Took %v to stablize ---\n\n", time.Since(startTime))
+	fmt.Printf("--- Took %v to stabilize ---\n\n", time.Since(startTime))
 
 	fmt.Println("=== Broadcast one message ===")
 
